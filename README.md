@@ -60,7 +60,14 @@ If you want the gate active in your local project without committing any new fil
    pre-commit install --config .git/pre-commit-config.yaml --hook-type pre-push
    ```
 
-### Approach 2: Team Shared Mode
+### Approach 3: Custom Private Remote Whitelist
+By default, standard private subnets (RFC 1918 private IPs, `localhost`, `.internal`, `.local`, `.lan`) pass silently without review.
+You can configure custom private hosts via Git config:
+```bash
+# Set global or local regex whitelist:
+git config --global pushgate.privatePattern "my-private-host|git\.mycompany\.com"
+```
+
 Create `.pre-commit-config.yaml` at your repository root:
 ```yaml
 repos:

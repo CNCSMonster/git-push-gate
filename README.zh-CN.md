@@ -60,7 +60,14 @@
    pre-commit install --config .git/pre-commit-config.yaml --hook-type pre-push
    ```
 
-### 姿势 2：团队共享模式（随项目版本库管理）
+### 姿势 3：自定义私有远端白名单
+默认会自动识别常见私有网段（RFC 1918 私有 IP、`localhost`、`.internal`、`.local`、`.lan`）并免审放行。
+如果您有团队专属的私有 Git 域名或跳板机，可配置白名单正则：
+```bash
+# 全局或当前仓库配置私有远端正则：
+git config --global pushgate.privatePattern "my-private-host|git\.mycompany\.com"
+```
+
 在项目根目录创建 `.pre-commit-config.yaml`：
 ```yaml
 repos:

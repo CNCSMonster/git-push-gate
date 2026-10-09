@@ -33,16 +33,32 @@ if (!remoteUrl) {
   }
 }
 
-// 检查是否为私有远端白名单（内网 IP、私有 bare 路径、指定内网主机名）
-const privatePatterns = [
+// 检查是否为私有远端白名单（默认包含内网 IP、localhost、.internal、.local 等通用私有特征）
+const defaultPrivatePatterns = [
+  /127\.0\.0\.1/,
+  /localhost/,
   /192\.168\./,
   /10\.\d+\./,
   /172\.(1[6-9]|2\d|3[01])\./,
-  /tencent-cloud-server/,
-  /my-git-ssh-repos/,
   /\.internal\b/,
-  /\.local\b/
+  /\.local\b/,
+  /\.lan\b/
 ];
+
+// 支持开发者通过 git config 或环境变量自定义私有远端模式
+let customPattern = process.env.PUSHGATE_PRIVATE_PATTERN || '';
+if (!customPattern) {
+  try {
+    customPattern = execSync('git config pushgate.privatePattern 2>/dev/null', { encoding: 'utf-8' }).trim();
+  } catch {}
+}
+
+const privatePatterns = [...defaultPrivatePatterns];
+if (customPattern) {
+  try {
+    privatePatterns.push(new RegExp(customPattern, 'i'));
+  } catch {}
+}
 
 const isPrivate = privatePatterns.some((pattern) => pattern.test(remoteUrl));
 if (isPrivate) {
