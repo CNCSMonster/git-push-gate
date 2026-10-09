@@ -81,6 +81,9 @@ const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 const isTTY = Boolean(process.stdin.isTTY);
 
 function findChromiumBrowser() {
+  if (process.env.MOCK_NO_BROWSER === '1') {
+    return null;
+  }
   const candidates = [
     'google-chrome',
     'google-chrome-stable',
