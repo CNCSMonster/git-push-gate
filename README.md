@@ -112,19 +112,39 @@ To eliminate supply chain risks entirely, this project adheres to the **zero-dep
    - A Git **40-character Commit SHA** is cryptographically calculated from the entire repository tree. **If an attacker changes even a single whitespace in the code, the hash will completely change.**
    - By pinning the exact 40-character SHA instead of a tag, you guarantee that the code running on your machine matches the audited source byte-for-byte.
 
-### Step-by-Step Instructions:
-In your `.pre-commit-config.yaml` or `.git/pre-commit-config.yaml`, pin `rev` to the exact 40-character commit hash:
+### 💡 How to apply this? (Two simple methods)
 
-```yaml
+#### Method A: [One-Liner Automation] Copy & Paste directly into your terminal
+Run this block in your project root. It automatically generates the pinned config in your private `.git/` folder and installs the hook (**0 working tree files added, never committed to upstream**):
+
+```bash
+# 1. Write the cryptographically pinned private config:
+cat << 'EOF' > .git/pre-commit-config.yaml
 repos:
   - repo: https://github.com/CNCSMonster/git-push-gate
-    # Cryptographically pinned to v1.0.0 release hash:
     rev: 258340a7510b474402a1093f806a9950c197931e
     hooks:
       - id: public-push-gui-gate
+EOF
+
+# 2. Activate pre-push gate:
+pre-commit install --config .git/pre-commit-config.yaml --hook-type pre-push
 ```
 
-> **Tip**: Once pinned this way, `pre-commit` will exclusively run this exact, verified snapshot on your machine, preventing any unauthorized upstream drift.
+#### Method B: [Querying Hashes Yourself] How to inspect the commit hash for any future release?
+Instead of browsing GitHub web pages manually, query the remote repository directly using Git:
+
+```bash
+# Retrieve the exact 40-character commit hash for a tag:
+git ls-remote https://github.com/CNCSMonster/git-push-gate.git refs/tags/v1.0.0
+```
+Terminal output:
+```text
+258340a7510b474402a1093f806a9950c197931e        refs/tags/v1.0.0
+```
+Simply paste that 40-character string into the `rev:` field.
+
+> **Security Benefit**: Once pinned via the 40-character hash, `pre-commit` will exclusively run this exact, immutable snapshot, eliminating silent updates and supply chain drift.
 
 ---
 

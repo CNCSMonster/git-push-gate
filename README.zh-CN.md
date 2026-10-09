@@ -112,19 +112,39 @@ pre-commit install --hook-type pre-push
    - 而 Git 提交的 **40 位 Commit 哈希（SHA-1）** 是由全部代码内容通过密码学哈希算出来的。**代码哪怕被黑客改动一个标点符号，哈希值都会彻底改变**。
    - 因此，**直接在配置中写死具体的 40 位哈希值**，就能确保拉取到的代码与您审查时的代码字节级完全一致，上游即使被黑也绝不可能偷换代码。
 
-### 手把手操作指引：
-在 `.pre-commit-config.yaml` 或 `.git/pre-commit-config.yaml` 中，将 `rev` 从模糊的 `v1.0.0` 替换为确切的 40 位哈希：
+### 💡 读者怎么操作？（提供两种极简方式）
 
-```yaml
+#### 方式 A：【懒人一键命令】复制整段直接在终端回车（无需手写任何文件）
+在您的本地项目终端里，直接粘贴运行以下命令，会自动在 `.git/` 私有目录生成锁死配置并完成安装（**工作区 0 文件变动，绝不随代码提交**）：
+
+```bash
+# 1. 自动写入锁定 40 位哈希的私有配置：
+cat << 'EOF' > .git/pre-commit-config.yaml
 repos:
   - repo: https://github.com/CNCSMonster/git-push-gate
-    # 使用 v1.0.0 对应的确切 40 位不可变哈希（密码学防篡改）
     rev: 258340a7510b474402a1093f806a9950c197931e
     hooks:
       - id: public-push-gui-gate
+EOF
+
+# 2. 一键激活生效：
+pre-commit install --config .git/pre-commit-config.yaml --hook-type pre-push
 ```
 
-> **小贴士**：通过这种方式锁定后，无论以后 GitHub 上的仓库怎么变动，`pre-commit` 在您的电脑上永远只会执行这一个经过您审查锁死的版本，物理杜绝供应链依赖漂移。
+#### 方式 B：【授人以渔】如果未来发布了新版本，如何自己查出对应的 40 位哈希？
+您无需打开 GitHub 网页肉眼去翻，直接在终端敲这一行 Git 原生命令即可自动查询：
+
+```bash
+# 查询指定版本标签的 40 位确切提交哈希：
+git ls-remote https://github.com/CNCSMonster/git-push-gate.git refs/tags/v1.0.0
+```
+终端会立即打印出：
+```text
+258340a7510b474402a1093f806a9950c197931e        refs/tags/v1.0.0
+```
+把最前面的这一长串 40 位字符复制填入配置文件的 `rev:` 后面即可。
+
+> **效果**：一旦填入 40 位哈希，`pre-commit` 在您的电脑上永远只会执行这一个经过密码学锁死的版本。即使未来上游仓库发生变动甚至被黑客攻击，也物理杜绝了静默更新与依赖漂移。
 
 ---
 
