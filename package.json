@@ -1,0 +1,22 @@
+{
+  "name": "git-push-gate",
+  "version": "1.0.0",
+  "description": "Ergonomic centered GUI / TUI audit gate before pushing commits to public Git remotes (GitHub, Gitee, GitLab).",
+  "bin": {
+    "git-push-gate": "./bin/git-push-gate.mjs"
+  },
+  "type": "module",
+  "keywords": [
+    "git-hook",
+    "pre-push",
+    "pre-commit",
+    "security-gate",
+    "ai-agent-guard",
+    "safety"
+  ],
+  "author": "CNCSMonster",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,355 @@
+#!/usr/bin/env node
+
+/**
+ * git-push-gate: Public Push Safety Gate
+ *
+ * 核心功能：
+ * 1. 拦截发往公开 Git 托管平台的未授权推送
+ * 2. 依赖自检：检测图形环境与 Chromium 架构浏览器，缺失时抛出排错指引
+ * 3. 三态自适应降级：
+ *    - GUI 桌面：自适应屏幕居中偏上弹出 Chromium 卡片（含 Commits 摘要与 Diff 直方图）
+ *    - SSH 终端：终端 TUI 输出带颜色审计明细，等待手动输入确认
+ *    - 无头静默：严格失败安全 (Fail-Closed)，物理阻断 Agent / 脚本偷跑
+ * 4. 私有远端免审放行：内网 / 私有 SSH 仓库零延迟放行
+ */
+
+import http from 'node:http';
+import { spawn, execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import readline from 'node:readline';
+
+// ============================================================
+// 1. 解析目标远端并执行私有仓快路径放行 (Private Fast-Path)
+// ============================================================
+const remoteName = process.argv[2] || 'origin';
+let remoteUrl = process.argv[3] || '';
+
+if (!remoteUrl) {
+  try {
+    remoteUrl = execSync(`git remote get-url "${remoteName}" 2>/dev/null`, { encoding: 'utf-8' }).trim();
+  } catch {
+    remoteUrl = '';
+  }
+}
+
+// 检查是否为私有远端白名单（内网 IP、私有 bare 路径、指定内网主机名）
+const privatePatterns = [
+  /192\.168\./,
+  /10\.\d+\./,
+  /172\.(1[6-9]|2\d|3[01])\./,
+  /tencent-cloud-server/,
+  /my-git-ssh-repos/,
+  /\.internal\b/,
+  /\.local\b/
+];
+
+const isPrivate = privatePatterns.some((pattern) => pattern.test(remoteUrl));
+if (isPrivate) {
+  // 私有仓库推送，0 秒静默放行，不打扰开发
+  process.exit(0);
+}
+
+// ============================================================
+// 2. 收集 Git 待推送差异数据 (Commits & Diff Stat)
+// ============================================================
+let commitsSummary = '（未检测到新增 commit，可能为标签或无差异推送）';
+let diffStats = '';
+
+try {
+  const logOut = execSync('git log @{u}..HEAD --oneline -n 15 2>/dev/null || git log -1 --oneline', { encoding: 'utf-8' }).trim();
+  if (logOut) commitsSummary = logOut;
+} catch {
+  try {
+    commitsSummary = execSync('git log -1 --oneline', { encoding: 'utf-8' }).trim();
+  } catch {}
+}
+
+try {
+  diffStats = execSync('git diff --stat @{u}..HEAD 2>/dev/null', { encoding: 'utf-8' }).trim();
+  if (!diffStats) {
+    diffStats = execSync('git show --stat --oneline -s HEAD 2>/dev/null', { encoding: 'utf-8' }).trim();
+  }
+} catch {}
+
+const repoName = path.basename(process.cwd());
+
+// ============================================================
+// 3. 环境探测与浏览器依赖自检 (Dependency Self-Check)
+// ============================================================
+const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+const isTTY = Boolean(process.stdin.isTTY);
+
+function findChromiumBrowser() {
+  const candidates = [
+    'google-chrome',
+    'google-chrome-stable',
+    'chromium',
+    'chromium-browser',
+    'brave-browser',
+    'microsoft-edge'
+  ];
+
+  for (const bin of candidates) {
+    try {
+      execSync(`which ${bin} 2>/dev/null`);
+      return bin;
+    } catch {}
+  }
+  return null;
+}
+
+// ============================================================
+// 4. 三态自适应分流 (Adaptive Three-Tier Dispatch)
+// ============================================================
+
+// 4.1 GUI 桌面模式
+if (hasDisplay) {
+  const browserBin = findChromiumBrowser();
+  if (!browserBin) {
+    console.error(`
+\x1b[31;1m❌ [git-push-gate] 依赖缺失报错 (Missing Browser Dependency)\x1b[0m
+检测到当前处于图形桌面环境，但系统中未找到 Chromium 架构浏览器！
+门禁弹窗需要调用 Chromium 架构浏览器（以 --app 独立卡片模式渲染居中审计框）。
+
+\x1b[33m可被识别的浏览器候选列表：\x1b[0m
+  - google-chrome / google-chrome-stable
+  - chromium / chromium-browser
+  - brave-browser
+  - microsoft-edge
+
+\x1b[32m快速安装建议：\x1b[0m
+  - Ubuntu / Debian:  sudo apt install -y chromium-browser
+  - Fedora / RHEL:    sudo dnf install -y chromium
+  - Arch Linux:       sudo pacman -S --noconfirm chromium
+
+\x1b[31m[安全阻断] 为防止未审查推送偷跑，Git Push 已物理终止。\x1b[0m
+`);
+    process.exit(1);
+  }
+
+  runGuiGate(browserBin);
+}
+// 4.2 SSH 交互式终端模式 (TUI Fallback)
+else if (isTTY) {
+  runTuiGate();
+}
+// 4.3 无头非交互环境 (Fail-Closed)
+else {
+  console.error(`
+\x1b[31;1m❌ [git-push-gate: SECURITY BLOCKED]\x1b[0m
+检测到正在向公开远端 (\x1b[33m${remoteUrl || 'public remote'}\x1b[0m) 执行推送！
+当前运行环境为【无头 / 非交互】模式（未连接图形会话且无 TTY 交互终端）。
+根据人机分离安全原则，公开仓推送必须经由人类物理交互确认，已执行失败安全硬性阻断！
+`);
+  process.exit(1);
+}
+
+// ============================================================
+// 5. 模式实现：GUI 居中卡片渲染 (Chromium App)
+// ============================================================
+function runGuiGate(browserBin) {
+  let screenW = 1440;
+  let screenH = 900;
+  try {
+    const xrandrOut = execSync('xrandr --current 2>/dev/null', { encoding: 'utf-8' });
+    const match = xrandrOut.match(/connected.*?(\d+)x(\d+)\+(\d+)\+(\d+)/);
+    if (match) {
+      screenW = parseInt(match[1], 10);
+      screenH = parseInt(match[2], 10);
+    }
+  } catch {}
+
+  const winW = 620;
+  const winH = 500;
+  const posX = Math.max(0, Math.round((screenW - winW) / 2));
+  const posY = Math.max(0, Math.round(screenH * 0.36 - winH / 2));
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  let chromeProcess = null;
+  let resolved = false;
+
+  function finish(code) {
+    if (resolved) return;
+    resolved = true;
+    if (chromeProcess) {
+      try { chromeProcess.kill('SIGKILL'); } catch {}
+    }
+    server.close(() => {
+      if (code !== 0) {
+        console.error('\n\x1b[31m❌ [SECURITY BLOCKED] 公开仓推送已被用户 GUI 拒绝或超时！\x1b[0m');
+      } else {
+        console.log('\n\x1b[32m✅ [SECURITY PASSED] 已获得用户 GUI 显式授权，放行本次推送。\x1b[0m');
+      }
+      process.exit(code);
+    });
+  }
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/allow') {
+      res.end('ok');
+      finish(0);
+    } else if (req.url === '/deny') {
+      res.end('ok');
+      finish(1);
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>🚨 公开仓推送权限门禁 (git-push-gate)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #181825; color: #cdd6f4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    padding: 22px 24px; display: flex; flex-direction: column; justify-content: space-between;
+    height: 100vh; user-select: none;
+  }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .icon { font-size: 26px; }
+  .title { font-size: 17px; font-weight: 700; color: #f38ba8; letter-spacing: 0.5px; }
+  .desc { font-size: 13px; line-height: 1.45; color: #a6adc8; margin-bottom: 12px; }
+  .meta-box {
+    background: #1e1e2e; border: 1px solid #313244; border-radius: 8px;
+    padding: 8px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; color: #89b4fa; line-height: 1.5; margin-bottom: 12px;
+  }
+  .meta-box span { color: #6c7086; }
+  .section-label {
+    font-size: 12px; font-weight: 600; color: #fab387; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .scroll-box {
+    background: #11111b; border: 1px solid #313244; border-radius: 8px;
+    padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px; color: #a6e3a1; line-height: 1.5; max-height: 155px;
+    overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+    margin-bottom: 14px;
+  }
+  .footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #313244; padding-top: 14px; }
+  .timer { font-size: 12px; color: #6c7086; }
+  .btn-group { display: flex; gap: 10px; }
+  button {
+    padding: 9px 20px; border-radius: 6px; font-size: 13px; font-weight: 600;
+    cursor: pointer; border: none; transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.85; }
+  .btn-deny { background: #313244; color: #f38ba8; border: 1px solid #45475a; }
+  .btn-allow { background: #a6e3a1; color: #11111b; }
+</style>
+</head>
+<body>
+  <div>
+    <div class="header">
+      <div class="icon">🚨</div>
+      <div class="title">公开仓推送安全审计门禁</div>
+    </div>
+    <div class="desc">
+      检测到代码推送请求！该操作将代码合并推送到 <b>GitHub 公开版本</b>。<br>
+      请核实以下准备发布的 Commit 详情与文件变动明细：
+    </div>
+    <div class="meta-box">
+      <div><span>目标仓库:</span> ${escapeHtml(repoName)}</div>
+      <div><span>远端地址:</span> ${escapeHtml(remoteUrl || 'origin')}</div>
+    </div>
+    <div class="section-label">📋 即将同步推向公开仓的内容 (Commits & Diff Stat)</div>
+    <div class="scroll-box"><b>[Commits 摘要]</b>\n${escapeHtml(commitsSummary)}\n\n<b>[变更统计]</b>\n${escapeHtml(diffStats || '无本地未推文件变更')}</div>
+  </div>
+  <div class="footer">
+    <div class="timer" id="timer">30 秒后自动拦截</div>
+    <div class="btn-group">
+      <button class="btn-deny" onclick="action('/deny')">❌ 拒绝拦截 (Esc)</button>
+      <button class="btn-allow" onclick="action('/allow')">✅ 授权推送 (Enter)</button>
+    </div>
+  </div>
+  <script>
+    let left = 30;
+    const timerEl = document.getElementById('timer');
+    const interval = setInterval(() => {
+      left--;
+      if (left <= 0) {
+        clearInterval(interval);
+        action('/deny');
+      } else {
+        timerEl.innerText = left + ' 秒后自动拦截';
+      }
+    }, 1000);
+
+    function action(endpoint) {
+      clearInterval(interval);
+      fetch(endpoint).catch(() => {});
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') action('/deny');
+      if (e.key === 'Enter') action('/allow');
+    });
+  </script>
+</body>
+</html>`);
+    }
+  });
+
+  server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port;
+    chromeProcess = spawn(browserBin, [
+      `--app=http://127.0.0.1:${port}`,
+      `--window-size=${winW},${winH}`,
+      `--window-position=${posX},${posY}`,
+      '--user-data-dir=/tmp/git-push-gate-profile',
+      '--no-first-run',
+      '--no-default-browser-check'
+    ], { stdio: 'ignore' });
+
+    chromeProcess.on('exit', () => {
+      finish(1);
+    });
+  });
+
+  setTimeout(() => {
+    finish(1);
+  }, 31000);
+}
+
+// ============================================================
+// 6. 模式实现：SSH 交互终端降级 (Terminal TUI Fallback)
+// ============================================================
+function runTuiGate() {
+  console.log('\n\x1b[35;1m====================================================================\x1b[0m');
+  console.log('\x1b[31;1m🚨 [git-push-gate] 公开仓推送安全审计门禁 (SSH / TTY 模式)\x1b[0m');
+  console.log('\x1b[35;1m====================================================================\x1b[0m');
+  console.log(`\x1b[34m目标仓库:\x1b[0m ${repoName}`);
+  console.log(`\x1b[34m远端地址:\x1b[0m ${remoteUrl}`);
+  console.log('\n\x1b[33;1m📋 [Commits 摘要]\x1b[0m');
+  console.log(commitsSummary);
+  console.log('\n\x1b[36;1m📊 [变更统计]\x1b[0m');
+  console.log(diffStats || '无本地未推文件变更');
+  console.log('\x1b[35m--------------------------------------------------------------------\x1b[0m');
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  const timer = setTimeout(() => {
+    console.log('\n\x1b[31m❌ [超时拦截] 30 秒无输入，已自动终止推送！\x1b[0m');
+    rl.close();
+    process.exit(1);
+  }, 30000);
+
+  rl.question('\x1b[32;1m确认授权本次公开推送？输入 "yes" 放行，其它任意键拒绝 (30s 超时): \x1b[0m', (answer) => {
+    clearTimeout(timer);
+    rl.close();
+    if (answer.trim().toLowerCase() === 'yes') {
+      console.log('\x1b[32m✅ [SECURITY PASSED] 已获得人工确认，放行本次推送。\x1b[0m\n');
+      process.exit(0);
+    } else {
+      console.log('\x1b[31m❌ [SECURITY BLOCKED] 用户已拒绝本次公开推送！\x1b[0m\n');
+      process.exit(1);
+    }
+  });
+}
