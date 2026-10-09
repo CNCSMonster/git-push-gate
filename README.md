@@ -99,15 +99,32 @@ The gate adapts across workstations, remote SSH sessions, and CI environments:
 
 ---
 
-## 🔒 Supply Chain Safety & Auditability
+## 🔒 Supply Chain Safety & Tamper-Proof Pinning
 
-The entire core implementation resides in `bin/git-push-gate.mjs` (~200 lines of pure Node.js) with **zero third-party npm dependencies**.
+Many engineers ask: **"What if an upstream open-source hook repository gets compromised and leaks my private code or credentials?"**
 
-Developers and security auditors can inspect the code within minutes to verify there are no hidden network calls, then pin it immutably via Git Commit SHA:
+To eliminate supply chain risks entirely, this project adheres to the **zero-dependency, quick-audit, and cryptographic pinning** doctrine:
+
+1. **Zero Third-Party Dependencies (Auditable in minutes)**:
+   This tool has no bloated npm dependencies. The entire logic lives in a single file [`bin/git-push-gate.mjs`](./bin/git-push-gate.mjs) (~200 lines of standard Node.js). You or your security team can inspect the entire codebase line-by-line within minutes to confirm there are zero hidden network calls.
+2. **What is "Immutable 40-character Commit Hash Pinning"?**
+   - Floating tags (e.g. `rev: v1.0.0`) could theoretically be reassigned if an upstream repository is ever compromised.
+   - A Git **40-character Commit SHA** is cryptographically calculated from the entire repository tree. **If an attacker changes even a single whitespace in the code, the hash will completely change.**
+   - By pinning the exact 40-character SHA instead of a tag, you guarantee that the code running on your machine matches the audited source byte-for-byte.
+
+### Step-by-Step Instructions:
+In your `.pre-commit-config.yaml` or `.git/pre-commit-config.yaml`, pin `rev` to the exact 40-character commit hash:
+
 ```yaml
-rev: <your-audited-40-char-commit-hash>
+repos:
+  - repo: https://github.com/CNCSMonster/git-push-gate
+    # Cryptographically pinned to v1.0.0 release hash:
+    rev: 258340a7510b474402a1093f806a9950c197931e
+    hooks:
+      - id: public-push-gui-gate
 ```
-Once pinned, it stays physically locked on your machine and will never auto-update without explicit human action.
+
+> **Tip**: Once pinned this way, `pre-commit` will exclusively run this exact, verified snapshot on your machine, preventing any unauthorized upstream drift.
 
 ---
 
