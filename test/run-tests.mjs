@@ -122,7 +122,7 @@ function sendCdpEval(wsUrl, expression) {
           const payload = Buffer.from(JSON.stringify({
             id: 1,
             method: 'Runtime.evaluate',
-            params: { expression, awaitPromise: true }
+            params: { expression }
           }));
           const mask = crypto.randomBytes(4);
           const masked = Buffer.alloc(payload.length);
@@ -277,19 +277,25 @@ if (!hasDisplay) {
     const wsDebuggerUrl = await waitForPageDebuggerUrl(cdpPort, serverPort);
     assert.ok(wsDebuggerUrl, '未能成功连接 Chrome 页面调试通道');
 
-    // 2. 确保页面内 .btn-allow 元素已经完成 DOM 渲染并挂载
-    await sendCdpEval(wsDebuggerUrl, `
-      new Promise((resolve) => {
-        const check = () => {
-          if (document.querySelector('.btn-allow')) resolve(true);
-          else setTimeout(check, 50);
-        };
-        check();
-      })
-    `);
-
-    // 3. 通过 Chrome 原生 CDP，真实调用页面内 .btn-allow 元素的 click()
-    await sendCdpEval(wsDebuggerUrl, "document.querySelector('.btn-allow').click()");
+    // 2. 通过 Chrome 原生 CDP，轮询等待 DOM 渲染并真实触发 .btn-allow 点击
+    let clicked = false;
+    for (let i = 0; i < 50; i++) {
+      try {
+        const evalRes = await sendCdpEval(wsDebuggerUrl, `
+          (function() {
+            const btn = document.querySelector('.btn-allow');
+            if (btn) { btn.click(); return 'clicked'; }
+            return 'not_found';
+          })()
+        `);
+        if (evalRes && evalRes.includes('clicked')) {
+          clicked = true;
+          break;
+        }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(clicked, '未能成功在 Chrome 页面中点击 .btn-allow 按钮');
 
     // 3. 验证整个系统链路如期以 0 退出，放行本次推送
     const exitCode = await new Promise((resolve) => {
@@ -338,19 +344,25 @@ if (!hasDisplay) {
     const wsDebuggerUrl = await waitForPageDebuggerUrl(cdpPort, serverPort);
     assert.ok(wsDebuggerUrl, '未能成功连接 Chrome 页面调试通道');
 
-    // 2. 确保页面内 .btn-deny 元素已经完成 DOM 渲染并挂载
-    await sendCdpEval(wsDebuggerUrl, `
-      new Promise((resolve) => {
-        const check = () => {
-          if (document.querySelector('.btn-deny')) resolve(true);
-          else setTimeout(check, 50);
-        };
-        check();
-      })
-    `);
-
-    // 3. 通过 Chrome 原生 CDP，真实调用页面内 .btn-deny 元素的 click()
-    await sendCdpEval(wsDebuggerUrl, "document.querySelector('.btn-deny').click()");
+    // 2. 通过 Chrome 原生 CDP，轮询等待 DOM 渲染并真实触发 .btn-deny 点击
+    let clicked = false;
+    for (let i = 0; i < 50; i++) {
+      try {
+        const evalRes = await sendCdpEval(wsDebuggerUrl, `
+          (function() {
+            const btn = document.querySelector('.btn-deny');
+            if (btn) { btn.click(); return 'clicked'; }
+            return 'not_found';
+          })()
+        `);
+        if (evalRes && evalRes.includes('clicked')) {
+          clicked = true;
+          break;
+        }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(clicked, '未能成功在 Chrome 页面中点击 .btn-deny 按钮');
 
     // 3. 验证系统链路如期以 1 退出，安全阻断本次推送
     const exitCode = await new Promise((resolve) => {
