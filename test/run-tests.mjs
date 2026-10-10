@@ -280,6 +280,10 @@ if (!hasDisplay) {
     // 2. 通过 Chrome 原生 CDP，轮询等待 DOM 渲染并真实触发 .btn-allow 点击
     let clicked = false;
     for (let i = 0; i < 50; i++) {
+      if (child.exitCode !== null) {
+        clicked = true;
+        break;
+      }
       try {
         const evalRes = await sendCdpEval(wsDebuggerUrl, `
           (function() {
@@ -288,7 +292,7 @@ if (!hasDisplay) {
             return 'not_found';
           })()
         `);
-        if (evalRes && evalRes.includes('clicked')) {
+        if ((evalRes && evalRes.includes('clicked')) || child.exitCode !== null) {
           clicked = true;
           break;
         }
@@ -347,6 +351,10 @@ if (!hasDisplay) {
     // 2. 通过 Chrome 原生 CDP，轮询等待 DOM 渲染并真实触发 .btn-deny 点击
     let clicked = false;
     for (let i = 0; i < 50; i++) {
+      if (child.exitCode !== null) {
+        clicked = true;
+        break;
+      }
       try {
         const evalRes = await sendCdpEval(wsDebuggerUrl, `
           (function() {
@@ -355,7 +363,7 @@ if (!hasDisplay) {
             return 'not_found';
           })()
         `);
-        if (evalRes && evalRes.includes('clicked')) {
+        if ((evalRes && evalRes.includes('clicked')) || child.exitCode !== null) {
           clicked = true;
           break;
         }
