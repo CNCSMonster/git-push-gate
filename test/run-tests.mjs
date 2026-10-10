@@ -253,6 +253,11 @@ if (!hasDisplay) {
     let stdout = '';
     let port = null;
 
+    const childExitPromise = new Promise((resolve) => {
+      if (child.exitCode !== null) resolve(child.exitCode);
+      else child.on('close', resolve);
+    });
+
     const readyPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('等待 GUI 弹窗就绪超时 (15s)'));
@@ -302,9 +307,7 @@ if (!hasDisplay) {
     assert.ok(clicked, '未能成功在 Chrome 页面中点击 .btn-allow 按钮');
 
     // 3. 验证整个系统链路如期以 0 退出，放行本次推送
-    const exitCode = await new Promise((resolve) => {
-      child.on('close', resolve);
-    });
+    const exitCode = await childExitPromise;
     assert.strictEqual(exitCode, 0, `真实点击授权推送按钮后，退出码应为 0，实际退出码: ${exitCode}`);
   });
 
@@ -323,6 +326,11 @@ if (!hasDisplay) {
 
     let stdout = '';
     let port = null;
+
+    const childExitPromise = new Promise((resolve) => {
+      if (child.exitCode !== null) resolve(child.exitCode);
+      else child.on('close', resolve);
+    });
 
     const readyPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -373,9 +381,7 @@ if (!hasDisplay) {
     assert.ok(clicked, '未能成功在 Chrome 页面中点击 .btn-deny 按钮');
 
     // 3. 验证系统链路如期以 1 退出，安全阻断本次推送
-    const exitCode = await new Promise((resolve) => {
-      child.on('close', resolve);
-    });
+    const exitCode = await childExitPromise;
     assert.strictEqual(exitCode, 1, `真实点击拒绝拦截按钮后，退出码应为 1，实际退出码: ${exitCode}`);
   });
 }
