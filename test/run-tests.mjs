@@ -2,6 +2,8 @@
 
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
+import crypto from 'node:crypto';
 import assert from 'node:assert';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +26,20 @@ async function runTestCase(name, fn) {
     console.error(err);
     process.exitCode = 1;
   }
+}
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => {
+      const port = s.address().port;
+      s.close((err) => {
+        if (err) reject(err);
+        else resolve(port);
+      });
+    });
+    s.on('error', reject);
+  });
 }
 
 function runProcess(args, env = {}, stdinInput = null) {
@@ -62,6 +78,115 @@ function httpGet(url) {
       res.on('end', () => resolve({ statusCode: res.statusCode, body: data }));
     }).on('error', reject);
   });
+}
+
+/**
+ * 原生零依赖 CDP 指令执行器 (向 Chrome 发送 Runtime.evaluate)
+ */
+/**
+ * 纯原生零依赖 CDP 指令执行器 (纯 TCP 协议实现，跨 Node 18~24 绝对稳定)
+ */
+function sendCdpEval(wsUrl, expression) {
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+    const url = new URL(wsUrl);
+    const client = net.connect(parseInt(url.port, 10), url.hostname, () => {
+      const key = crypto.randomBytes(16).toString('base64');
+      const req = [
+        `GET ${url.pathname} HTTP/1.1`,
+        `Host: ${url.host}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${key}`,
+        'Sec-WebSocket-Version: 13',
+        '\r\n'
+      ].join('\r\n');
+      client.write(req);
+    });
+
+    let handshaken = false;
+    let buf = Buffer.alloc(0);
+    const timer = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      client.destroy();
+      reject(new Error('CDP 指令响应超时 (5s)'));
+    }, 5000);
+
+    client.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (!handshaken) {
+        const headerEnd = buf.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          handshaken = true;
+          const payload = Buffer.from(JSON.stringify({
+            id: 1,
+            method: 'Runtime.evaluate',
+            params: { expression, awaitPromise: true }
+          }));
+          const mask = crypto.randomBytes(4);
+          const masked = Buffer.alloc(payload.length);
+          for (let i = 0; i < payload.length; i++) {
+            masked[i] = payload[i] ^ mask[i % 4];
+          }
+
+          let frameHeader;
+          if (payload.length < 126) {
+            frameHeader = Buffer.from([0x81, 0x80 | payload.length]);
+          } else {
+            frameHeader = Buffer.alloc(4);
+            frameHeader[0] = 0x81;
+            frameHeader[1] = 0x80 | 126;
+            frameHeader.writeUInt16BE(payload.length, 2);
+          }
+          client.write(Buffer.concat([frameHeader, mask, masked]));
+          buf = buf.subarray(headerEnd + 4);
+        }
+      }
+      if (handshaken && buf.length > 2) {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        client.destroy();
+        resolve(buf.toString('utf-8'));
+      }
+    });
+
+    client.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    client.on('close', () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * 轮询等待 Chrome 渲染就绪并获取页面的 CDP 调试 WebSocket 链接
+ */
+async function waitForPageDebuggerUrl(cdpPort, expectedPort, maxWaitMs = 6000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const res = await httpGet(`http://127.0.0.1:${cdpPort}/json`);
+      if (res.statusCode === 200) {
+        const targets = JSON.parse(res.body);
+        const page = targets.find((t) => t.type === 'page' && t.url && t.url.includes(String(expectedPort)));
+        if (page && page.webSocketDebuggerUrl) {
+          return page.webSocketDebuggerUrl;
+        }
+      }
+    } catch {}
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`在 ${maxWaitMs}ms 内未能在 Chrome CDP (${cdpPort}) 中找到对应页面`);
 }
 
 console.log('\n========================================');
@@ -103,7 +228,7 @@ await runTestCase('无头非交互模式安全阻断 (退出码应为 1)', async
 });
 
 // -------------------------------------------------------------
-// 测试 3：GUI 模式端到端自动化测试 (真实拉起 HTTP 与浏览器，测试授权放行)
+// 测试 3：真实 GUI 端到端测试 (CDP 真实 DOM 点击触发测试)
 // -------------------------------------------------------------
 const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
 
@@ -111,11 +236,15 @@ if (!hasDisplay) {
   console.log('\nℹ️ 当前环境无图形会话 ($DISPLAY)，跳过真实 GUI 交互测试。');
   console.log('  （提示：CI 环境中通过 xvfb-run 会自动启用完整 GUI 交互测试）');
 } else {
-  await runTestCase('GUI 模式端到端：弹窗页面内容渲染与授权放行 (/allow)', async () => {
+  await runTestCase('真实 GUI 端到端：CDP 真实点击「授权推送」按钮 (.btn-allow)', async () => {
+    const cdpPort = await getFreePort();
+    const profileDir = `/tmp/pushgate-test-profile-${Date.now()}-allow`;
     const child = spawn(process.execPath, [gateBinPath, 'origin', 'https://github.com/CNCSMonster/git-push-gate.git'], {
       env: {
         ...process.env,
-        PUSHGATE_TEST_MODE: '1'
+        PUSHGATE_TEST_MODE: '1',
+        PUSHGATE_CDP_PORT: String(cdpPort),
+        PUSHGATE_PROFILE_DIR: profileDir
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -143,28 +272,40 @@ if (!hasDisplay) {
     const serverPort = await readyPromise;
     assert.ok(serverPort > 0, '未成功获取本地服务端口');
 
-    // 验证页面内容
-    const pageRes = await httpGet(`http://127.0.0.1:${serverPort}/`);
-    assert.strictEqual(pageRes.statusCode, 200);
-    assert.ok(pageRes.body.includes('公开仓推送安全审计门禁'), '页面应包含审计标题');
-    assert.ok(pageRes.body.includes('即将同步推向公开仓的内容'), '页面应包含审查区域');
+    // 1. 等待 Chrome 真实完成页面加载并获取该页面的 WebSocket 调试通道
+    const wsDebuggerUrl = await waitForPageDebuggerUrl(cdpPort, serverPort);
+    assert.ok(wsDebuggerUrl, '未能成功连接 Chrome 页面调试通道');
 
-    // 模拟用户点击“授权推送”
-    const allowRes = await httpGet(`http://127.0.0.1:${serverPort}/allow`);
-    assert.strictEqual(allowRes.statusCode, 200);
+    // 2. 确保页面内 .btn-allow 元素已经完成 DOM 渲染并挂载
+    await sendCdpEval(wsDebuggerUrl, `
+      new Promise((resolve) => {
+        const check = () => {
+          if (document.querySelector('.btn-allow')) resolve(true);
+          else setTimeout(check, 50);
+        };
+        check();
+      })
+    `);
 
-    // 验证进程以 0 退出
+    // 3. 通过 Chrome 原生 CDP，真实调用页面内 .btn-allow 元素的 click()
+    await sendCdpEval(wsDebuggerUrl, "document.querySelector('.btn-allow').click()");
+
+    // 3. 验证整个系统链路如期以 0 退出，放行本次推送
     const exitCode = await new Promise((resolve) => {
       child.on('close', resolve);
     });
-    assert.strictEqual(exitCode, 0, `点击授权推送后，退出码应为 0，实际退出码: ${exitCode}`);
+    assert.strictEqual(exitCode, 0, `真实点击授权推送按钮后，退出码应为 0，实际退出码: ${exitCode}`);
   });
 
-  await runTestCase('GUI 模式端到端：用户点击拒绝拦截 (/deny)', async () => {
+  await runTestCase('真实 GUI 端到端：CDP 真实点击「拒绝拦截」按钮 (.btn-deny)', async () => {
+    const cdpPort = await getFreePort();
+    const profileDir = `/tmp/pushgate-test-profile-${Date.now()}-deny`;
     const child = spawn(process.execPath, [gateBinPath, 'origin', 'https://github.com/CNCSMonster/git-push-gate.git'], {
       env: {
         ...process.env,
-        PUSHGATE_TEST_MODE: '1'
+        PUSHGATE_TEST_MODE: '1',
+        PUSHGATE_CDP_PORT: String(cdpPort),
+        PUSHGATE_PROFILE_DIR: profileDir
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -192,15 +333,29 @@ if (!hasDisplay) {
     const serverPort = await readyPromise;
     assert.ok(serverPort > 0, '未成功获取本地服务端口');
 
-    // 模拟用户点击“拒绝拦截”
-    const denyRes = await httpGet(`http://127.0.0.1:${serverPort}/deny`);
-    assert.strictEqual(denyRes.statusCode, 200);
+    // 1. 等待 Chrome 真实完成页面加载并获取调试通道
+    const wsDebuggerUrl = await waitForPageDebuggerUrl(cdpPort, serverPort);
+    assert.ok(wsDebuggerUrl, '未能成功连接 Chrome 页面调试通道');
 
-    // 验证进程以 1 退出
+    // 2. 确保页面内 .btn-deny 元素已经完成 DOM 渲染并挂载
+    await sendCdpEval(wsDebuggerUrl, `
+      new Promise((resolve) => {
+        const check = () => {
+          if (document.querySelector('.btn-deny')) resolve(true);
+          else setTimeout(check, 50);
+        };
+        check();
+      })
+    `);
+
+    // 3. 通过 Chrome 原生 CDP，真实调用页面内 .btn-deny 元素的 click()
+    await sendCdpEval(wsDebuggerUrl, "document.querySelector('.btn-deny').click()");
+
+    // 3. 验证系统链路如期以 1 退出，安全阻断本次推送
     const exitCode = await new Promise((resolve) => {
       child.on('close', resolve);
     });
-    assert.strictEqual(exitCode, 1, `点击拒绝拦截后，退出码应为 1，实际退出码: ${exitCode}`);
+    assert.strictEqual(exitCode, 1, `真实点击拒绝拦截按钮后，退出码应为 1，实际退出码: ${exitCode}`);
   });
 }
 

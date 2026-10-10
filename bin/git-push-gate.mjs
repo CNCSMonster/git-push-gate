@@ -194,8 +194,12 @@ function runGuiGate(browserBin) {
   function finish(code) {
     if (resolved) return;
     resolved = true;
-    if (chromeProcess) {
-      try { chromeProcess.kill('SIGKILL'); } catch {}
+    if (chromeProcess && chromeProcess.pid) {
+      try {
+        process.kill(-chromeProcess.pid, 'SIGKILL');
+      } catch {
+        try { chromeProcess.kill('SIGKILL'); } catch {}
+      }
     }
     server.close(() => {
       if (code !== 0) {
@@ -300,7 +304,12 @@ function runGuiGate(browserBin) {
 
     function action(endpoint) {
       clearInterval(interval);
-      fetch(endpoint).catch(() => {});
+      fetch(endpoint).finally(() => {
+        try { window.close(); } catch {}
+      });
+      setTimeout(() => {
+        try { window.close(); } catch {}
+      }, 60);
     }
 
     window.addEventListener('keydown', (e) => {
@@ -316,24 +325,34 @@ function runGuiGate(browserBin) {
   const listenPort = parseInt(process.env.PUSHGATE_PORT, 10) || 0;
   server.listen(listenPort, '127.0.0.1', () => {
     const port = server.address().port;
+    const cdpPort = parseInt(process.env.PUSHGATE_CDP_PORT, 10) || 0;
     if (process.env.PUSHGATE_TEST_MODE === '1') {
-      console.log(`[PUSHGATE_READY] port=${port}`);
+      console.log(`[PUSHGATE_READY] port=${port} cdp=${cdpPort}`);
     }
+
+    const profileDir = process.env.PUSHGATE_PROFILE_DIR || '/tmp/git-push-gate-profile';
 
     const chromeArgs = [
       `--app=http://127.0.0.1:${port}`,
       `--window-size=${winW},${winH}`,
       `--window-position=${posX},${posY}`,
-      '--user-data-dir=/tmp/git-push-gate-profile',
+      `--user-data-dir=${profileDir}`,
       '--no-first-run',
       '--no-default-browser-check'
     ];
+
+    if (cdpPort > 0) {
+      chromeArgs.push(`--remote-debugging-port=${cdpPort}`);
+    }
 
     if (process.env.CI || (typeof process.getuid === 'function' && process.getuid() === 0)) {
       chromeArgs.push('--no-sandbox', '--disable-gpu');
     }
 
-    chromeProcess = spawn(browserBin, chromeArgs, { stdio: 'ignore' });
+    chromeProcess = spawn(browserBin, chromeArgs, {
+      stdio: 'ignore',
+      detached: true
+    });
 
     chromeProcess.on('exit', () => {
       finish(1);
