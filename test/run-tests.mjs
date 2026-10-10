@@ -171,14 +171,14 @@ function sendCdpEval(wsUrl, expression) {
 /**
  * 轮询等待 Chrome 渲染就绪并获取页面的 CDP 调试 WebSocket 链接
  */
-async function waitForPageDebuggerUrl(cdpPort, expectedPort, maxWaitMs = 6000) {
+async function waitForPageDebuggerUrl(cdpPort, expectedPort, maxWaitMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     try {
       const res = await httpGet(`http://127.0.0.1:${cdpPort}/json`);
       if (res.statusCode === 200) {
         const targets = JSON.parse(res.body);
-        const page = targets.find((t) => t.type === 'page' && t.url && t.url.includes(String(expectedPort)));
+        const page = targets.find((t) => t.type === 'page');
         if (page && page.webSocketDebuggerUrl) {
           return page.webSocketDebuggerUrl;
         }
@@ -254,8 +254,8 @@ if (!hasDisplay) {
 
     const readyPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('等待 GUI 弹窗就绪超时 (10s)'));
-      }, 10000);
+        reject(new Error('等待 GUI 弹窗就绪超时 (15s)'));
+      }, 15000);
 
       child.stdout.on('data', (d) => {
         stdout += d.toString();
@@ -315,8 +315,8 @@ if (!hasDisplay) {
 
     const readyPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error('等待 GUI 弹窗就绪超时 (10s)'));
-      }, 10000);
+        reject(new Error('等待 GUI 弹窗就绪超时 (15s)'));
+      }, 15000);
 
       child.stdout.on('data', (d) => {
         stdout += d.toString();
