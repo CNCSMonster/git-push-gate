@@ -6,10 +6,10 @@
  * 核心功能：
  * 1. 拦截发往公开 Git 托管平台的未授权推送
  * 2. 依赖自检：检测图形环境与 Chromium 架构浏览器，缺失时抛出排错指引
- * 3. 三态自适应降级：
- *    - GUI 桌面：自适应屏幕居中偏上弹出 Chromium 卡片（含 Commits 摘要与 Diff 直方图）
+ * 3. 运行环境自适应降级：
+ *    - GUI 桌面：自适应屏幕居中偏上弹出 Chromium 卡片（含 Commits 摘要与文件改动统计）
  *    - SSH 终端：终端 TUI 输出带颜色审计明细，等待手动输入确认
- *    - 无头静默：严格失败安全 (Fail-Closed)，物理阻断 Agent / 脚本偷跑
+ *    - 无头静默：安全失败 (Fail-Closed)，直接阻断未授权推送
  * 4. 私有远端免审放行：内网 / 私有 SSH 仓库零延迟放行
  */
 
@@ -142,7 +142,7 @@ if (hasDisplay) {
   - Fedora / RHEL:    sudo dnf install -y chromium
   - Arch Linux:       sudo pacman -S --noconfirm chromium
 
-\x1b[31m[安全阻断] 为防止未审查推送偷跑，Git Push 已物理终止。\x1b[0m
+\x1b[31m[安全阻断] 为防止未审查推送，Git Push 已终止。\x1b[0m
 `);
     process.exit(1);
   }
@@ -159,7 +159,7 @@ else {
 \x1b[31;1m❌ [git-push-gate: SECURITY BLOCKED]\x1b[0m
 检测到正在向公开远端 (\x1b[33m${remoteUrl || 'public remote'}\x1b[0m) 执行推送！
 当前运行环境为【无头 / 非交互】模式（未连接图形会话且无 TTY 交互终端）。
-根据人机分离安全原则，公开仓推送必须经由人类物理交互确认，已执行失败安全硬性阻断！
+根据人机确认安全原则，公开仓推送必须经由人工交互确认，已阻断推送！
 `);
   process.exit(1);
 }
@@ -313,16 +313,27 @@ function runGuiGate(browserBin) {
     }
   });
 
-  server.listen(0, '127.0.0.1', () => {
+  const listenPort = parseInt(process.env.PUSHGATE_PORT, 10) || 0;
+  server.listen(listenPort, '127.0.0.1', () => {
     const port = server.address().port;
-    chromeProcess = spawn(browserBin, [
+    if (process.env.PUSHGATE_TEST_MODE === '1') {
+      console.log(`[PUSHGATE_READY] port=${port}`);
+    }
+
+    const chromeArgs = [
       `--app=http://127.0.0.1:${port}`,
       `--window-size=${winW},${winH}`,
       `--window-position=${posX},${posY}`,
       '--user-data-dir=/tmp/git-push-gate-profile',
       '--no-first-run',
       '--no-default-browser-check'
-    ], { stdio: 'ignore' });
+    ];
+
+    if (process.env.CI || (typeof process.getuid === 'function' && process.getuid() === 0)) {
+      chromeArgs.push('--no-sandbox', '--disable-gpu');
+    }
+
+    chromeProcess = spawn(browserBin, chromeArgs, { stdio: 'ignore' });
 
     chromeProcess.on('exit', () => {
       finish(1);

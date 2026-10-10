@@ -1,8 +1,8 @@
 - id: public-push-gui-gate
   name: Public Push Safety Gate (git-push-gate)
   description: Ergonomic centered GUI / TUI audit modal reviewing commits and diffs before pushing to public Git remotes.
-  entry: node bin/git-push-gate.mjs
-  language: system
+  entry: bin/git-push-gate.mjs
+  language: script
   stages: [pre-push]
   always_run: true
   pass_filenames: false

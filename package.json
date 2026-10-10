@@ -5,6 +5,9 @@
   "bin": {
     "git-push-gate": "./bin/git-push-gate.mjs"
   },
+  "scripts": {
+    "test": "node test/run-tests.mjs"
+  },
   "type": "module",
   "keywords": [
     "git-hook",

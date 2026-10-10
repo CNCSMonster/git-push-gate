@@ -14,7 +14,7 @@ Autonomous coding agents (Cursor, Pi, Claude Code, Aider) operate with elevated 
 **`git-push-gate` establishes a safety guard before Git network transmission:**
 - **Zero Friction on Private Remotes**: Pushes to internal bare repos, private SSH remotes, or VPN subnets proceed in **0.00s silently** without interrupting flow;
 - **Mandatory Review on Public Remotes**: Pushes to public hosts (GitHub, GitLab, etc.) **strictly require physical human confirmation**;
-- **Transparent Commits & Diff Stat**: Automatically inspects and displays **pending commit titles and line change histograms** in a scrollable panel;
+- **Transparent Commits & Diff Stat**: Automatically inspects and displays **pending commit titles and file change statistics (Diff Stat)** in a scrollable panel;
 - **Adaptive Centering**: Dynamically calculates screen coordinates to place the modal in the upper-center foveal vision zone, preventing corner occlusions.
 
 ---
@@ -98,18 +98,18 @@ git push --dry-run origin <your-branch>
 
 ---
 
-## 🛡️ Three-Tier Adaptive Fallback Matrix
+## 🛡️ Runtime Adaptation & Fallback Strategy
 
-The gate adapts across workstations, remote SSH sessions, and CI environments:
+The gate automatically adapts its confirmation mechanism across workstations, remote SSH sessions, and CI/headless environments:
 
 ```
 [Push to Public Git Remote Detected]
                  │
-                 ├── 1. Graphical Desktop ($DISPLAY / $WAYLAND) ──▶ Chromium Centered Modal (Mouse / Keyboard)
+                 ├── 1. Graphical Desktop ($DISPLAY / $WAYLAND) ──▶ Centered Modal Card (Mouse / Keyboard)
                  │
-                 ├── 2. Remote SSH Interactive TTY             ──▶ Terminal ANSI Diff Histogram + type "yes"
+                 ├── 2. Remote SSH Interactive TTY             ──▶ Terminal ANSI Diff Stat + type "yes"
                  │
-                 └── 3. Headless Non-Interactive (Agent / CI)   ──▶ Strict Fail-Closed (exit code 1 block)
+                 └── 3. Headless / Non-Interactive (Agent / CI) ──▶ Fail-Closed (exit code 1 block)
 ```
 
 ---
