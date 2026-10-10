@@ -173,12 +173,13 @@ function sendCdpEval(wsUrl, expression) {
  */
 async function waitForPageDebuggerUrl(cdpPort, expectedPort, maxWaitMs = 15000) {
   const start = Date.now();
+  const targetPrefix = `http://127.0.0.1:${expectedPort}`;
   while (Date.now() - start < maxWaitMs) {
     try {
       const res = await httpGet(`http://127.0.0.1:${cdpPort}/json`);
       if (res.statusCode === 200) {
         const targets = JSON.parse(res.body);
-        const page = targets.find((t) => t.type === 'page');
+        const page = targets.find((t) => t.type === 'page' && t.url && t.url.startsWith(targetPrefix));
         if (page && page.webSocketDebuggerUrl) {
           return page.webSocketDebuggerUrl;
         }
@@ -186,7 +187,7 @@ async function waitForPageDebuggerUrl(cdpPort, expectedPort, maxWaitMs = 15000) 
     } catch {}
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error(`在 ${maxWaitMs}ms 内未能在 Chrome CDP (${cdpPort}) 中找到对应页面`);
+  throw new Error(`在 ${maxWaitMs}ms 内未能在 Chrome CDP (${cdpPort}) 中找到目标页面 (${targetPrefix})`);
 }
 
 console.log('\n========================================');

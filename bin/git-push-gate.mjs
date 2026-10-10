@@ -338,7 +338,9 @@ function runGuiGate(browserBin) {
       `--window-position=${posX},${posY}`,
       `--user-data-dir=${profileDir}`,
       '--no-first-run',
-      '--no-default-browser-check'
+      '--no-default-browser-check',
+      '--disable-extensions',
+      '--disable-component-extensions-with-background-pages'
     ];
 
     if (cdpPort > 0) {
